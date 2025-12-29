@@ -1,10 +1,11 @@
+
 import time
 import re
 import csv
 import json
 import os
 from datetime import datetime
-from config import HiltonConfig as config
+
 import undetected_chromedriver as uc
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -18,15 +19,16 @@ from selenium.common.exceptions import (
 
 # ================== CONFIG ==================
 
-START_URL = config.START_URL 
-OUTPUT_FILE_CSV = config.OUTPUT_FILE_CSV 
-OUTPUT_FILE_JSON = config.OUTPUT_FILE_JSON 
-STATE_FILE = config.STATE_FILE 
+START_URL = "https://www.hilton.com/en/locations/pet-friendly/"
+OUTPUT_FILE_CSV = "hilton_pet_friendly_hotels.csv"
+OUTPUT_FILE_JSON = "hilton_pet_friendly_hotels.json"
+STATE_FILE = "hilton_last_state.json"
 
 FIELDS = [
     "hotel_code",
     "hotel_name",
     "address",
+    "address_map_url",  # 🆕 added here
     "phone",
     "rating",
     "description",
@@ -38,6 +40,8 @@ FIELDS = [
     "nearby_json",
     "airport_json",
     "is_pet_friendly",
+    "state",  # 🆕 add state
+    "country",  # 🆕 add country
     "last_updated",
     "property_url"
 ]
@@ -45,7 +49,7 @@ FIELDS = [
 MAX_SCROLLS = 20
 RETRY_LIMIT = 3
 HEADLESS = False 
-LOCATIONS_FILE = config.LOCATIONS_FILE
+LOCATIONS_FILE = "hilton_locations.json"
 
 
 # 🔒 WATCHDOG CONFIG (ADDED)
@@ -54,7 +58,7 @@ WATCHDOG_CHECK_INTERVAL = 20
 
 # ================== GLOBAL WATCHDOG ==================
 last_success_time = time.time()
-REFRESH_EVERY_PAGES = 3
+REFRESH_EVERY_PAGES = 1
 
 
 # ================== UTILS ==================
@@ -301,7 +305,11 @@ def main():
             except Exception as e:
                 print(f"⚠ Pet-Friendly filter not found / already active: {e}")
 
-            page = start_page if loc_idx == start_location_idx else 1
+            if loc_idx == start_location_idx:
+                page = start_page
+            else:
+                page = 1
+                start_hotel_idx = 0
 
 
             while True:
@@ -324,13 +332,23 @@ def main():
                     ):
                         continue
                     try:
-                        # ⬇️ ADD HERE
-                        property_url = ""
+                        # 🆕 Extract property website (Visit website link)
                         try:
-                            parent_card = btn.find_element(By.XPATH, ".//ancestor::a")
-                            property_url = parent_card.get_attribute("href") or ""
+                            property_url = popup.find_element(
+                                By.XPATH,
+                                ".//a[contains(@href,'hilton.com/en/hotels/') and contains(text(),'Visit website')]"
+                            ).get_attribute("href")
                         except:
                             property_url = ""
+
+                        # 🆕 Extract map link (Google Maps “Directions” link)
+                        try:
+                            address_map_url = popup.find_element(
+                                By.XPATH,
+                                ".//a[contains(@href,'https://www.google.com/maps/search/?api=1')]"
+                            ).get_attribute("href")
+                        except:
+                            address_map_url = ""
 
                         driver.execute_script(
                             "arguments[0].scrollIntoView({block:'center'});", btn
@@ -369,6 +387,7 @@ def main():
                             "hotel_name": name,
                             "property_url": property_url,
                             "address": address,
+                            "address_map_url": address_map_url,   # 🆕 Added line
                             "phone": re.search(
                                 r'(\+?\d[\d\s().-]{7,}\d)', all_text
                             ).group(1) if re.search(
@@ -384,25 +403,32 @@ def main():
                             "nearby_json": json.dumps(nearby, ensure_ascii=False),
                             "airport_json": json.dumps(airport, ensure_ascii=False),
                             "is_pet_friendly": "true",
+                            "state": location_name,          # 🆕
+                            "country": "USA",                # 🆕
                             "last_updated": datetime.utcnow().isoformat()
                         }
 
                         last_success_time = time.time()
-
                         print(f"✅ Extracted: {hotel_data['hotel_name']}")
 
+                        # ✅ Save after each record (CSV + JSON + STATE)
                         with open(OUTPUT_FILE_CSV, "a", newline="", encoding="utf-8") as f:
                             csv.DictWriter(f, fieldnames=FIELDS).writerow(hotel_data)
 
+                        # JSON append safely after each record
                         with open(OUTPUT_FILE_JSON, "r+", encoding="utf-8") as jf:
-                            data = json.load(jf)
+                            try:
+                                data = json.load(jf)
+                            except json.JSONDecodeError:
+                                data = []
                             data.append(hotel_data)
                             jf.seek(0)
                             json.dump(data, jf, ensure_ascii=False, indent=2)
+                            jf.truncate()
 
-                        # ✅ SAVE STATE AFTER SUCCESSFUL HOTEL
                         save_state(loc_idx, page, i + 1)
 
+                        # Close popup safely
                         popup.send_keys(Keys.ESCAPE)
                         time.sleep(1)
 
@@ -416,25 +442,24 @@ def main():
 
                 try:
                     btn_next = driver.find_element(By.ID, "pagination-right")
-                    if "disabled" in btn_next.get_attribute("class"):
-                        break
 
+                    if not btn_next.is_enabled() or "disabled" in btn_next.get_attribute("class"):
+                        print(f"✅ Finished all pages for {location_name}")
+                        break  # exit the while loop properly
+
+                    # go to next page
                     driver.execute_script("arguments[0].click();", btn_next)
                     page += 1
                     time.sleep(4)
                     save_state(loc_idx, page, 0)
 
-                    # 🔁 HARD REFRESH AFTER EVERY N PAGES
+                    # periodic refresh (unchanged logic)
                     if page % REFRESH_EVERY_PAGES == 0:
                         print("🔄 Refreshing browser to avoid stale state...")
                         driver.refresh()
                         wait.until(lambda d: d.execute_script("return document.readyState") == "complete")
                         time.sleep(3)
-
-                        # Re-apply pet filter
                         click_pet_friendly_filter(driver, wait)
-
-                        # Navigate back to current page
                         for _ in range(page - 1):
                             try:
                                 driver.execute_script(
@@ -444,9 +469,17 @@ def main():
                                 time.sleep(3)
                             except:
                                 break
-
-                except:
+                except NoSuchElementException:
+                    print(f"✅ No pagination found, moving to next location ({location_name})")
                     break
+            
+            # ✅ ADD THIS RIGHT HERE (IMPORTANT)
+            print(f"➡ Finished location: {location_name}")
+            save_state(loc_idx + 1, 1, 0)
+
+            # reset resume pointers for next location
+            start_page = 1
+            start_hotel_idx = 0
 
     finally:
         driver.quit()
