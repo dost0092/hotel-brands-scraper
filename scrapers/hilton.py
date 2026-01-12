@@ -20,8 +20,20 @@ from selenium.common.exceptions import (
 # ================== CONFIG ==================
 
 START_URL = "https://www.hilton.com/en/locations/pet-friendly/"
-OUTPUT_FILE_CSV = "hilton_pet_friendly_hotels.csv"
-OUTPUT_FILE_JSON = "hilton_pet_friendly_hotels.json"
+JSON_OUTPUT_DIR = r"D:\Personal\KRUIZ\KRUIZ\hotel_brands_screper\json\hilton"
+os.makedirs(JSON_OUTPUT_DIR, exist_ok=True)
+OUTPUT_FILE_JSON = os.path.join(
+    JSON_OUTPUT_DIR,
+    "hilton_pet_friendly_hotels.json"
+)
+CSV_OUTPUT_DIR = r"D:\Personal\KRUIZ\KRUIZ\hotel_brands_screper\csv\hilton"
+os.makedirs(CSV_OUTPUT_DIR, exist_ok=True)
+
+OUTPUT_FILE_CSV = os.path.join(
+    CSV_OUTPUT_DIR,
+    "hilton_pet_friendly_hotels.csv"
+)
+
 STATE_FILE = "hilton_last_state.json"
 
 FIELDS = [
@@ -49,7 +61,7 @@ FIELDS = [
 MAX_SCROLLS = 20
 RETRY_LIMIT = 3
 HEADLESS = False 
-LOCATIONS_FILE = "hilton_locations.json"
+LOCATIONS_FILE = "D:\Personal\KRUIZ\KRUIZ\hotel_brands_screper\json\pagination_links/hilton_locations.json"
 
 
 # 🔒 WATCHDOG CONFIG (ADDED)
